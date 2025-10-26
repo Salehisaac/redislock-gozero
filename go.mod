@@ -1,4 +1,4 @@
-module redisLock_goZero
+module github.com/Salehisaac/redislock-gozero
 
 go 1.21.9
 
