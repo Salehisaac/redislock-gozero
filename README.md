@@ -1,76 +1,34 @@
-# redislock
+# redislock-gozero 🔒  
+_A Go-Zero compatible Redis distributed lock._
 
-[![Test](https://github.com/bsm/redislock/actions/workflows/test.yml/badge.svg)](https://github.com/bsm/redislock/actions/workflows/test.yml)
-[![GoDoc](https://godoc.org/github.com/bsm/redislock?status.png)](http://godoc.org/github.com/bsm/redislock)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Go Reference](https://pkg.go.dev/badge/github.com/<your-username>/redislock-gozero.svg)](https://pkg.go.dev/github.com/<your-username>/redislock-gozero)
+[![Go Report Card](https://goreportcard.com/badge/github.com/<your-username>/redislock-gozero)](https://goreportcard.com/report/github.com/<your-username>/redislock-gozero)
 
-Simplified distributed locking implementation using [Redis](http://redis.io/topics/distlock).
-For more information, please see examples.
+---
 
-## Examples
+## 🚀 Overview
 
-```go
-import (
-  "context"
-  "fmt"
-  "log"
-  "time"
+`redislock-gozero` is a lightweight distributed locking library for Go, fully compatible with  
+[`github.com/zeromicro/go-zero/core/stores/redis`](https://github.com/zeromicro/go-zero).
 
-  "github.com/bsm/redislock"
-  "github.com/redis/go-redis/v9"
-)
+It’s based on the logic of [bsm/redislock](https://github.com/bsm/redislock),  
+but rewritten to use **go-zero’s Redis client** instead of `go-redis/v9`.
 
-func main() {
-	// Connect to redis.
-	client := redis.NewClient(&redis.Options{
-		Network:	"tcp",
-		Addr:		"127.0.0.1:6379",
-	})
-	defer client.Close()
+This makes it ideal for **go-zero microservices** or any application already using `go-zero`'s core Redis layer.
 
-	// Create a new lock client.
-	locker := redislock.New(client)
+---
 
-	ctx := context.Background()
+## ✨ Features
 
-	// Try to obtain lock.
-	lock, err := locker.Obtain(ctx, "my-key", 100*time.Millisecond, nil)
-	if err == redislock.ErrNotObtained {
-		fmt.Println("Could not obtain lock!")
-		// It default 0 times backoff retrive, next step should be return or continue in a loop.
-		return
-	} else if err != nil {
-		log.Fatalln(err)
-	}
+- 🔒 Safe distributed lock with automatic expiration  
+- 🔁 Configurable retry/backoff strategies  
+- 🕒 Lock TTL introspection & refresh support  
+- 🧠 Context-aware operations  
+- ⚡ Built on top of go-zero’s efficient Redis client
 
-	// Don't forget to defer Release.
-	defer lock.Release(ctx)
-	fmt.Println("I have a lock!")
+---
 
-	// Sleep and check the remaining TTL.
-	time.Sleep(50 * time.Millisecond)
-	if ttl, err := lock.TTL(ctx); err != nil {
-		log.Fatalln(err)
-	} else if ttl > 0 {
-		fmt.Println("Yay, I still have my lock!")
-	}
+## 📦 Installation
 
-	// Extend my lock.
-	if err := lock.Refresh(ctx, 100*time.Millisecond, nil); err != nil {
-		log.Fatalln(err)
-	}
-
-	// Sleep a little longer, then check.
-	time.Sleep(100 * time.Millisecond)
-	if ttl, err := lock.TTL(ctx); err != nil {
-		log.Fatalln(err)
-	} else if ttl == 0 {
-		fmt.Println("Now, my lock has expired!")
-	}
-
-}
-```
-
-## Documentation
-
-Full documentation is available on [GoDoc](http://godoc.org/github.com/bsm/redislock)
+```bash
+go get github.com/Salehisaac/redislock-gozero.git

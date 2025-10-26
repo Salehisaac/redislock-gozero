@@ -3,16 +3,19 @@ package redislock
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha1"
 	_ "embed"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"io"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/redis/go-redis/v9"
+	"github.com/zeromicro/go-zero/core/stores/redis"
 )
 
 //go:embed release.lua
@@ -28,13 +31,6 @@ var luaPTTLScript string
 var luaObtainScript string
 
 var (
-	luaRefresh = redis.NewScript(luaRefreshScript)
-	luaRelease = redis.NewScript(luaReleaseScript)
-	luaPTTL    = redis.NewScript(luaPTTLScript)
-	luaObtain  = redis.NewScript(luaObtainScript)
-)
-
-var (
 	// ErrNotObtained is returned when a lock cannot be obtained.
 	ErrNotObtained = errors.New("redislock: not obtained")
 
@@ -42,20 +38,17 @@ var (
 	ErrLockNotHeld = errors.New("redislock: lock not held")
 )
 
-// RedisClient is a minimal client interface.
-type RedisClient interface {
-	redis.Scripter
-}
+
 
 // Client wraps a redis client.
 type Client struct {
-	client RedisClient
+	client *redis.Redis
 	tmp    []byte
 	tmpMu  sync.Mutex
 }
 
 // New creates a new Client instance with a custom namespace.
-func New(client RedisClient) *Client {
+func New(client *redis.Redis) *Client {
 	return &Client{client: client}
 }
 
@@ -120,7 +113,7 @@ func (c *Client) ObtainMulti(ctx context.Context, keys []string, ttl time.Durati
 }
 
 func (c *Client) obtain(ctx context.Context, keys []string, value string, tokenLen int, ttlVal string) (bool, error) {
-	_, err := luaObtain.Run(ctx, c.client, keys, value, tokenLen, ttlVal).Result()
+	_, err := c.Run(ctx, keys, luaObtainScript , value, tokenLen, ttlVal)
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return false, nil
@@ -154,15 +147,15 @@ type Lock struct {
 	tokenLen int
 }
 
-// Obtain is a short-cut for New(...).Obtain(...).
-func Obtain(ctx context.Context, client RedisClient, key string, ttl time.Duration, opt *Options) (*Lock, error) {
-	return New(client).Obtain(ctx, key, ttl, opt)
-}
+// // Obtain is a short-cut for New(...).Obtain(...).
+// func Obtain(ctx context.Context, client RedisClient, key string, ttl time.Duration, opt *Options) (*Lock, error) {
+// 	return New(client).Obtain(ctx, key, ttl, opt)
+// }
 
-// ObtainMulti is a short-cut for New(...).ObtainMulti(...).
-func ObtainMulti(ctx context.Context, client RedisClient, keys []string, ttl time.Duration, opt *Options) (*Lock, error) {
-	return New(client).ObtainMulti(ctx, keys, ttl, opt)
-}
+// // ObtainMulti is a short-cut for New(...).ObtainMulti(...).
+// func ObtainMulti(ctx context.Context, client RedisClient, keys []string, ttl time.Duration, opt *Options) (*Lock, error) {
+// 	return New(client).ObtainMulti(ctx, keys, ttl, opt)
+// }
 
 // Key returns the redis key used by the lock.
 // If the lock hold multiple key, only the first is returned.
@@ -191,7 +184,7 @@ func (l *Lock) TTL(ctx context.Context) (time.Duration, error) {
 	if l == nil {
 		return 0, ErrLockNotHeld
 	}
-	res, err := luaPTTL.Run(ctx, l.client, l.keys, l.value).Result()
+	res, err := l.Run(ctx ,l.keys,luaPTTLScript , l.value)
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return 0, nil
@@ -211,7 +204,7 @@ func (l *Lock) Refresh(ctx context.Context, ttl time.Duration, opt *Options) err
 		return ErrNotObtained
 	}
 	ttlVal := strconv.FormatInt(int64(ttl/time.Millisecond), 10)
-	_, err := luaRefresh.Run(ctx, l.client, l.keys, l.value, ttlVal).Result()
+	_, err := l.Run(ctx,l.keys,luaRefreshScript , l.value, ttlVal)
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return ErrNotObtained
@@ -227,7 +220,7 @@ func (l *Lock) Release(ctx context.Context) error {
 	if l == nil {
 		return ErrLockNotHeld
 	}
-	_, err := luaRelease.Run(ctx, l.client, l.keys, l.value).Result()
+	_, err := l.Run(ctx, l.keys,luaReleaseScript, l.value)
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return ErrLockNotHeld
@@ -344,4 +337,36 @@ func (r *exponentialBackoff) NextBackoff() time.Duration {
 	} else {
 		return d
 	}
+}
+
+// Run optimistically uses EVALSHA to run the script. If script does not exist
+// it is retried using EVAL.
+func (c *Client)Run(ctx context.Context, keys []string, script string, args ...any) (any, error) {
+	// 1) If we already know the SHA, try EVALSHA first.
+	if sha, ok := redis.GetScriptCache().GetSha(script); ok {
+		val, err := c.client.EvalShaCtx(ctx, sha, keys, args...)
+		if err == nil {
+			return val, nil
+		}
+		if !isNoScript(err) {
+			return nil, err
+		}
+		// NOSCRIPT: fall through to EVAL.
+	}
+
+	// 2) EVAL the script (also loads it into Redis' script cache on success).
+	val, err := c.client.EvalCtx(ctx, script, keys, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3) Cache SHA for next time (SHA1 is deterministic from the script text).
+	h := sha1.Sum([]byte(script))
+	redis.GetScriptCache().SetSha(script, hex.EncodeToString(h[:]))
+
+	return val, nil
+}
+
+func isNoScript(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "NOSCRIPT")
 }
