@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	redislock "redisLock_goZero"
+	redislock "github.com/Salehisaac/redislock-gozero"
 
 	gzredis "github.com/zeromicro/go-zero/core/stores/redis"
 )

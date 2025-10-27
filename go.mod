@@ -1,6 +1,6 @@
 module github.com/Salehisaac/redislock-gozero
 
-go 1.21.9
+go 1.21
 
 require (
 	github.com/bsm/redislock v0.9.4
